@@ -978,6 +978,13 @@ export default function App() {
   const [editMov, setEditMov]     = useState(null)
 
   // Persist
+  // Registrar Service Worker para PWA offline
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {})
+    }
+  }, [])
+
   useEffect(() => { save('movements', movements) }, [movements])
   useEffect(() => {
     save('fondoInicial', fondoInicial)
