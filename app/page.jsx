@@ -1,19 +1,19 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 
-// ─── BRAND ────────────────────────────────────────────────────────────────────
+// ─── BRAND ───────────────────────────────────────────────────────────────────
 const C = {
-  negro:  '#0D0D0D', hueso:  '#F5F2EC', hueso2: '#E8E3DA',
-  oliva:  '#8C8C5A', arena:  '#C4B49A', topo:   '#A8A49A',
-  verde:  '#5A8C5A', rojo:   '#C45A5A', azul:   '#5A6E8C',
+  negro: '#0D0D0D', hueso: '#F5F2EC', hueso2: '#E8E3DA',
+  oliva: '#8C8C5A', arena: '#C4B49A', topo: '#A8A49A',
+  verde: '#5A8C5A', rojo: '#C45A5A', azul: '#5A6E8C',
 }
 
-// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const MEDIOS = [
-  { id: 'efectivo',      label: 'Efectivo',     emoji: '💵', color: C.verde },
-  { id: 'transferencia', label: 'Transferencia', emoji: '🏦', color: C.azul  },
-  { id: 'nave',          label: 'Tarjeta Nave',  emoji: '💳', color: C.oliva },
-  { id: 'mp',            label: 'Mercado Pago',  emoji: '📱', color: C.arena },
+  { id: 'efectivo',      label: 'Efectivo',      emoji: '💵', color: C.verde },
+  { id: 'transferencia', label: 'Transferencia',  emoji: '🏦', color: C.azul  },
+  { id: 'nave',          label: 'Tarjeta Nave',   emoji: '💳', color: C.oliva },
+  { id: 'mp',            label: 'Mercado Pago',   emoji: '📱', color: C.arena },
 ]
 
 const CAT_INGRESO = ['Venta', 'Seña / Anticipo', 'Devolución de proveedor', 'Otro ingreso']
@@ -22,7 +22,7 @@ const CAT_EGRESO  = [
   'Sueldo / Retiro', 'Gastos del local', 'Marketing / Publicidad', 'Otro egreso',
 ]
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat('es-AR', {
   style: 'currency', currency: 'ARS', minimumFractionDigits: 0,
 }).format(n || 0)
@@ -34,9 +34,14 @@ const fmtDate = iso =>
     weekday: 'short', day: 'numeric', month: 'short',
   })
 
+const fmtDateFull = iso =>
+  new Date(iso + 'T12:00:00').toLocaleDateString('es-AR', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  })
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2)
 
-// ─── STORAGE (localStorage) ───────────────────────────────────────────────────
+// ─── STORAGE ─────────────────────────────────────────────────────────────────
 const load = (key, fallback) => {
   try {
     const v = localStorage.getItem(key)
@@ -47,7 +52,26 @@ const save = (key, val) => {
   try { localStorage.setItem(key, JSON.stringify(val)) } catch {}
 }
 
-// ─── UI PRIMITIVES ────────────────────────────────────────────────────────────
+// ─── EXPORT CSV ──────────────────────────────────────────────────────────────
+function exportCSV(movements) {
+  const header = 'Fecha,Tipo,Categoria,Medio,Monto,Descripcion,Etiquetas'
+  const rows = movements.map(m =>
+    [m.date, m.type, m.cat, m.medio, m.amount,
+     (m.desc || '').replace(/,/g, ';'),
+     (m.tags || []).join(';')
+    ].join(',')
+  )
+  const csv = [header, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `caja_${isoToday()}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ─── UI PRIMITIVES ───────────────────────────────────────────────────────────
 function Card({ children, style = {} }) {
   return (
     <div style={{
@@ -97,7 +121,7 @@ function FieldLabel({ children, required }) {
   )
 }
 
-function Input({ label, type = 'text', value, onChange, placeholder, prefix, note, required }) {
+function Input({ label, type = 'text', value, onChange, placeholder, prefix, required, inputMode }) {
   return (
     <div style={{ marginBottom: 14 }}>
       {label && <FieldLabel required={required}>{label}</FieldLabel>}
@@ -116,13 +140,13 @@ function Input({ label, type = 'text', value, onChange, placeholder, prefix, not
         )}
         <input
           type={type} value={value} onChange={onChange} placeholder={placeholder}
+          inputMode={inputMode}
           style={{
             flex: 1, border: 'none', outline: 'none', padding: '10px 12px',
-            fontSize: 14, background: 'transparent', color: C.negro,
+            fontSize: 15, background: 'transparent', color: C.negro,
           }}
         />
       </div>
-      {note && <div style={{ fontSize: 11, color: C.topo, marginTop: 4 }}>{note}</div>}
     </div>
   )
 }
@@ -132,153 +156,459 @@ function Select({ label, value, onChange, options, required }) {
     <div style={{ marginBottom: 14 }}>
       {label && <FieldLabel required={required}>{label}</FieldLabel>}
       <select value={value} onChange={onChange} style={{
-        width: '100%', border: `1.5px solid ${C.hueso2}`, borderRadius: 6,
-        padding: '10px 12px', fontSize: 14, color: C.negro,
-        background: 'white', outline: 'none', cursor: 'pointer',
+        width: '100%', padding: '10px 12px', borderRadius: 6,
+        border: `1.5px solid ${C.hueso2}`, fontSize: 15, background: 'white',
+        color: value ? C.negro : C.topo, outline: 'none',
       }}>
-        <option value="">— Elegí una opción —</option>
-        {options.map(o => (
-          <option key={o.value || o} value={o.value || o}>{o.label || o}</option>
-        ))}
+        <option value=''>— Elegí una opción —</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   )
 }
 
-// ─── MOV ROW ─────────────────────────────────────────────────────────────────
-function MovRow({ mov, onDelete }) {
-  const medio = MEDIOS.find(m => m.id === mov.paymentMethod) || MEDIOS[0]
-  const isIng = mov.type === 'ingreso'
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+function Toast({ msg, type = 'ok', onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 2800)
+    return () => clearTimeout(t)
+  }, [onClose])
+  const bg = type === 'ok' ? C.verde : type === 'error' ? C.rojo : C.azul
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 0', borderBottom: `1px solid ${C.hueso2}`,
+      position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+      background: bg, color: 'white', padding: '12px 22px', borderRadius: 30,
+      fontWeight: 700, fontSize: 14, zIndex: 9999, boxShadow: '0 4px 20px rgba(0,0,0,.18)',
+      display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
+    }}>
+      {type === 'ok' ? '✅' : type === 'error' ? '❌' : 'ℹ️'} {msg}
+    </div>
+  )
+}
+
+// ─── CONFIRM MODAL ───────────────────────────────────────────────────────────
+function ConfirmModal({ msg, onConfirm, onCancel }) {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 9000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
     }}>
       <div style={{
-        width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-        background: isIng ? C.verde + '22' : C.rojo + '22',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 16, fontWeight: 700, color: isIng ? C.verde : C.rojo,
+        background: 'white', borderRadius: 12, padding: '24px 28px',
+        maxWidth: 340, width: '100%', textAlign: 'center',
       }}>
-        {isIng ? '↑' : '↓'}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, fontSize: 13, color: C.negro }}>{mov.category}</span>
-          <Badge label={`${medio.emoji} ${medio.label}`} color={medio.color} />
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🗑️</div>
+        <p style={{ fontSize: 15, color: C.negro, marginBottom: 22, lineHeight: 1.5 }}>{msg}</p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Btn onClick={onCancel} full bg={C.hueso2}>Cancelar</Btn>
+          <Btn onClick={onConfirm} full bg={C.rojo} color='white'>Eliminar</Btn>
         </div>
-        {mov.description && (
-          <div style={{
-            fontSize: 12, color: C.topo, marginTop: 2,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {mov.description}
-          </div>
-        )}
-        <div style={{ fontSize: 11, color: C.topo, marginTop: 1 }}>
-          {fmtDate(mov.date)} · {mov.time}
-        </div>
-      </div>
-      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: isIng ? C.verde : C.rojo }}>
-          {isIng ? '+' : '-'}{fmt(mov.amount)}
-        </div>
-        {mov.vuelto > 0 && (
-          <div style={{ fontSize: 11, color: C.topo }}>vuelto {fmt(mov.vuelto)}</div>
-        )}
-        <button onClick={() => onDelete(mov.id)} style={{
-          background: 'none', border: 'none', color: C.topo,
-          cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 2,
-        }}>
-          ✕ borrar
-        </button>
       </div>
     </div>
   )
 }
 
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ movements, cajaInicial, todayDate, onSetCajaInicial }) {
-  const todayMovs = movements.filter(m => m.date === todayDate)
-  const cajaHoy = cajaInicial[todayDate] || 0
+// ─── EDIT MODAL ──────────────────────────────────────────────────────────────
+function EditModal({ mov, onSave, onClose }) {
+  const [amount, setAmount]   = useState(String(mov.amount))
+  const [cat, setCat]         = useState(mov.cat)
+  const [medio, setMedio]     = useState(mov.medio)
+  const [desc, setDesc]       = useState(mov.desc || '')
+  const [tags, setTags]       = useState((mov.tags || []).join(', '))
 
-  const totalIngresos = todayMovs.filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0)
-  const totalEgresos  = todayMovs.filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0)
-  const totalVueltos  = todayMovs
-    .filter(m => m.type === 'ingreso' && m.paymentMethod === 'efectivo')
-    .reduce((s, m) => s + (m.vuelto || 0), 0)
+  const cats = mov.type === 'ingreso' ? CAT_INGRESO : CAT_EGRESO
 
-  const byMedio = {}
-  MEDIOS.forEach(md => {
-    const ing = todayMovs.filter(m => m.type === 'ingreso' && m.paymentMethod === md.id).reduce((s, m) => s + m.amount, 0)
-    const eg  = todayMovs.filter(m => m.type === 'egreso'  && m.paymentMethod === md.id).reduce((s, m) => s + m.amount, 0)
-    byMedio[md.id] = { ing, eg, neto: ing - eg }
-  })
-
-  const efectivoEsperado = cajaHoy + byMedio.efectivo.ing - byMedio.efectivo.eg - totalVueltos
-
-  const [editCaja, setEditCaja]   = useState(false)
-  const [nuevaCaja, setNuevaCaja] = useState(cajaHoy.toString())
+  const handleSave = () => {
+    const n = parseFloat(amount)
+    if (!n || n <= 0 || !cat || !medio) return
+    onSave({ ...mov, amount: n, cat, medio, desc, tags: tags.split(',').map(t => t.trim()).filter(Boolean) })
+  }
 
   return (
-    <div>
-      {/* Header del día */}
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 9000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      overflowY: 'auto',
+    }}>
       <div style={{
-        background: C.negro, borderRadius: 10, padding: '16px 20px', marginBottom: 16,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        background: 'white', borderRadius: 12, padding: '24px 22px',
+        maxWidth: 420, width: '100%',
       }}>
-        <div>
-          <div style={{ color: C.arena, fontSize: 11, fontWeight: 600, letterSpacing: 1.5, textTransform: 'uppercase' }}>
-            Hoy
-          </div>
-          <div style={{ color: 'white', fontSize: 18, fontWeight: 700, marginTop: 2 }}>
-            {new Date(todayDate + 'T12:00').toLocaleDateString('es-AR', {
-              weekday: 'long', day: 'numeric', month: 'long',
-            })}
-          </div>
+        <h3 style={{ marginBottom: 18, color: C.negro }}>✏️ Editar movimiento</h3>
+
+        <Input label='Monto' type='number' value={amount}
+          onChange={e => setAmount(e.target.value)} prefix='$' required inputMode='numeric' />
+
+        <Select label='Categoría' value={cat}
+          onChange={e => setCat(e.target.value)} options={cats} required />
+
+        <FieldLabel>Medio de pago *</FieldLabel>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+          {MEDIOS.map(m => (
+            <button key={m.id} onClick={() => setMedio(m.id)} style={{
+              padding: '10px', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13,
+              border: medio === m.id ? `2px solid ${m.color}` : `1px solid ${C.hueso2}`,
+              background: medio === m.id ? m.color + '18' : 'white',
+              color: medio === m.id ? m.color : C.topo,
+            }}>
+              {m.emoji} {m.label}
+            </button>
+          ))}
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ color: C.topo, fontSize: 11 }}>Saldo del día</div>
-          <div style={{
-            fontSize: 22, fontWeight: 700,
-            color: totalIngresos - totalEgresos >= 0 ? C.arena : C.rojo,
-          }}>
-            {fmt(totalIngresos - totalEgresos)}
-          </div>
+
+        <Input label='Descripción (opcional)' value={desc}
+          onChange={e => setDesc(e.target.value)} placeholder='Ej: Mesa García' />
+
+        <Input label='Etiquetas (separadas por coma)' value={tags}
+          onChange={e => setTags(e.target.value)} placeholder='Ej: VIP, urgente' />
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+          <Btn onClick={onClose} full bg={C.hueso2}>Cancelar</Btn>
+          <Btn onClick={handleSave} full bg={C.negro} color='white'>Guardar cambios</Btn>
         </div>
       </div>
+    </div>
+  )
+}
 
-      {/* Fondo de caja */}
-      <Card style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>
-              💵 Fondo de caja inicial
-            </div>
-            {editCaja ? (
-              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-                <input
-                  type="number" value={nuevaCaja} onChange={e => setNuevaCaja(e.target.value)}
-                  style={{
-                    border: `1.5px solid ${C.arena}`, borderRadius: 6, padding: '6px 10px',
-                    fontSize: 14, width: 130, outline: 'none',
-                  }}
-                />
-                <Btn sm bg={C.oliva} color="white" onClick={() => {
-                  onSetCajaInicial(todayDate, parseFloat(nuevaCaja) || 0)
-                  setEditCaja(false)
-                }}>
-                  Guardar
-                </Btn>
+// ─── MINI BAR CHART ──────────────────────────────────────────────────────────
+function MiniBarChart({ data }) {
+  const max = Math.max(...data.map(d => d.value), 1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 60, marginTop: 10 }}>
+      {data.map(d => (
+        <div key={d.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <div style={{
+            width: '100%', background: d.color + 'AA',
+            borderRadius: '4px 4px 0 0',
+            height: `${Math.max((d.value / max) * 52, d.value > 0 ? 4 : 0)}px`,
+            transition: 'height .3s',
+          }} />
+          <span style={{ fontSize: 9, color: C.topo, textAlign: 'center', lineHeight: 1.2 }}>{d.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+// ─── NAV TAB ─────────────────────────────────────────────────────────────────
+function NavTab({ icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      flex: 1, background: 'none', border: 'none', cursor: 'pointer',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+      padding: '10px 0', color: active ? C.oliva : C.topo,
+      borderTop: active ? `2px solid ${C.oliva}` : '2px solid transparent',
+      transition: 'color .15s',
+    }}>
+      <span style={{ fontSize: 20 }}>{icon}</span>
+      <span style={{ fontSize: 11, fontWeight: 700 }}>{label}</span>
+    </button>
+  )
+}
+
+// ─── MOVEMENT CARD ───────────────────────────────────────────────────────────
+function MovCard({ mov, onEdit, onDelete }) {
+  const medio = MEDIOS.find(m => m.id === mov.medio) || MEDIOS[0]
+  const isIng = mov.type === 'ingreso'
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+      padding: '12px 0', borderBottom: `1px solid ${C.hueso2}`,
+    }}>
+      <div style={{
+        width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+        background: (isIng ? C.verde : C.rojo) + '18',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+      }}>
+        {medio.emoji}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <span style={{ fontWeight: 700, fontSize: 14, color: C.negro }}>{mov.cat}</span>
+            {mov.desc && (
+              <div style={{ fontSize: 12, color: C.topo, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                {mov.desc}
               </div>
-            ) : (
-              <div style={{ fontSize: 20, fontWeight: 700, color: C.negro, marginTop: 4 }}>
-                {fmt(cajaHoy)}
+            )}
+            {mov.tags && mov.tags.length > 0 && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                {mov.tags.map(t => (
+                  <span key={t} style={{
+                    background: C.arena + '33', color: C.oliva, fontSize: 10,
+                    fontWeight: 700, padding: '1px 7px', borderRadius: 20,
+                  }}>{t}</span>
+                ))}
+              </div>
+            )}
+            {mov.vuelto > 0 && (
+              <div style={{ fontSize: 11, color: C.topo, marginTop: 2 }}>
+                Vuelto: {fmt(mov.vuelto)}
+              </div>
+            )}
+            {mov.medioSecundario && (
+              <div style={{ fontSize: 11, color: C.azul, marginTop: 2 }}>
+                + {MEDIOS.find(m => m.id === mov.medioSecundario)?.label}: {fmt(mov.montoSecundario)}
               </div>
             )}
           </div>
-          {!editCaja && (
-            <Btn sm bg={C.hueso} onClick={() => { setEditCaja(true); setNuevaCaja(cajaHoy.toString()) }}>
+          <span style={{ fontWeight: 800, fontSize: 15, color: isIng ? C.verde : C.rojo, whiteSpace: 'nowrap', marginLeft: 8 }}>
+            {isIng ? '+' : '-'} {fmt(mov.amount)}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+          <Badge label={medio.label} color={medio.color} />
+          <button onClick={() => onEdit(mov)} style={{
+            background: 'none', border: `1px solid ${C.hueso2}`, borderRadius: 5,
+            padding: '2px 8px', fontSize: 11, cursor: 'pointer', color: C.azul, fontWeight: 600,
+          }}>✏️ Editar</button>
+          <button onClick={() => onDelete(mov.id)} style={{
+            background: 'none', border: `1px solid ${C.hueso2}`, borderRadius: 5,
+            padding: '2px 8px', fontSize: 11, cursor: 'pointer', color: C.rojo, fontWeight: 600,
+          }}>🗑️</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── FORM MOVIMIENTO ─────────────────────────────────────────────────────────
+function FormMovimiento({ onSave, showToast }) {
+  const [type, setType]                   = useState('ingreso')
+  const [date, setDate]                   = useState(isoToday())
+  const [cat, setCat]                     = useState('')
+  const [medio, setMedio]                 = useState('')
+  const [amount, setAmount]               = useState('')
+  const [desc, setDesc]                   = useState('')
+  const [tags, setTags]                   = useState('')
+  const [recibe, setRecibe]               = useState('')
+  const [splitEnabled, setSplitEnabled]   = useState(false)
+  const [medioSec, setMedioSec]           = useState('')
+  const [montoSec, setMontoSec]           = useState('')
+
+  const cats = type === 'ingreso' ? CAT_INGRESO : CAT_EGRESO
+
+  const vuelto = useMemo(() => {
+    const r = parseFloat(recibe)
+    const a = parseFloat(amount)
+    if (type === 'ingreso' && medio === 'efectivo' && r > 0 && a > 0 && r >= a) {
+      return r - a
+    }
+    return 0
+  }, [recibe, amount, type, medio])
+
+  const reset = () => {
+    setCat(''); setMedio(''); setAmount(''); setDesc(''); setTags('')
+    setRecibe(''); setSplitEnabled(false); setMedioSec(''); setMontoSec('')
+    setDate(isoToday())
+  }
+
+  const handleSubmit = () => {
+    const n = parseFloat(amount)
+    if (!n || n <= 0 || !cat || !medio) {
+      showToast('Completá todos los campos requeridos', 'error')
+      return
+    }
+    const mov = {
+      id: uid(), type, date, cat, medio, amount: n, desc,
+      tags: tags.split(',').map(t => t.trim()).filter(Boolean),
+      vuelto,
+      medioSecundario: splitEnabled && medioSec ? medioSec : null,
+      montoSecundario: splitEnabled && medioSec ? parseFloat(montoSec) || 0 : 0,
+    }
+    onSave(mov)
+    showToast(type === 'ingreso' ? '✅ Ingreso guardado' : '✅ Egreso guardado', 'ok')
+    reset()
+  }
+
+  return (
+    <div style={{ padding: '0 0 20px' }}>
+      <h2 style={{ marginBottom: 18, color: C.negro }}>Nuevo movimiento</h2>
+
+      {/* Tipo */}
+      <div style={{ display: 'flex', borderRadius: 8, overflow: 'hidden', marginBottom: 20, border: `1px solid ${C.hueso2}` }}>
+        {['ingreso', 'egreso'].map(t => (
+          <button key={t} onClick={() => { setType(t); setCat('') }} style={{
+            flex: 1, padding: '12px', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 14,
+            background: type === t ? (t === 'ingreso' ? C.verde : C.rojo) : 'white',
+            color: type === t ? 'white' : C.topo, transition: 'all .15s',
+          }}>
+            {t === 'ingreso' ? '↑ Ingreso' : '↓ Egreso'}
+          </button>
+        ))}
+      </div>
+
+      {/* Fecha */}
+      <Input label='Fecha' type='date' value={date} onChange={e => setDate(e.target.value)} />
+
+      {/* Categoría */}
+      <Select label='Categoría' value={cat} onChange={e => setCat(e.target.value)} options={cats} required />
+
+      {/* Medio de pago */}
+      <FieldLabel required>Medio de pago</FieldLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+        {MEDIOS.map(m => (
+          <button key={m.id} onClick={() => setMedio(m.id)} style={{
+            padding: '10px', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13,
+            border: medio === m.id ? `2px solid ${m.color}` : `1px solid ${C.hueso2}`,
+            background: medio === m.id ? m.color + '18' : 'white',
+            color: medio === m.id ? m.color : C.topo,
+          }}>
+            {m.emoji} {m.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Monto */}
+      <Input label='Monto' type='number' value={amount}
+        onChange={e => setAmount(e.target.value)} prefix='$' required inputMode='numeric' />
+
+      {/* Vuelto (solo efectivo ingreso) */}
+      {type === 'ingreso' && medio === 'efectivo' && (
+        <Input label='Recibe con (para calcular vuelto)' type='number' value={recibe}
+          onChange={e => setRecibe(e.target.value)} prefix='$' inputMode='numeric'
+          placeholder='Ej: 5000' />
+      )}
+      {vuelto > 0 && (
+        <div style={{
+          background: C.verde + '15', borderRadius: 8, padding: '10px 14px',
+          marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span style={{ fontWeight: 700, color: C.verde }}>💰 Vuelto a entregar:</span>
+          <span style={{ fontWeight: 800, fontSize: 18, color: C.verde }}>{fmt(vuelto)}</span>
+        </div>
+      )}
+
+      {/* Pago mixto */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: C.topo, fontWeight: 600 }}>
+          <input type='checkbox' checked={splitEnabled} onChange={e => setSplitEnabled(e.target.checked)}
+            style={{ width: 16, height: 16 }} />
+          Pago mixto (dividir entre dos medios)
+        </label>
+      </div>
+      {splitEnabled && (
+        <Card style={{ marginBottom: 14, background: C.hueso }}>
+          <FieldLabel>Segundo medio de pago</FieldLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
+            {MEDIOS.filter(m => m.id !== medio).map(m => (
+              <button key={m.id} onClick={() => setMedioSec(m.id)} style={{
+                padding: '8px', borderRadius: 7, cursor: 'pointer', fontWeight: 600, fontSize: 12,
+                border: medioSec === m.id ? `2px solid ${m.color}` : `1px solid ${C.hueso2}`,
+                background: medioSec === m.id ? m.color + '18' : 'white',
+                color: medioSec === m.id ? m.color : C.topo,
+              }}>
+                {m.emoji} {m.label}
+              </button>
+            ))}
+          </div>
+          <Input label='Monto del segundo medio' type='number' value={montoSec}
+            onChange={e => setMontoSec(e.target.value)} prefix='$' inputMode='numeric' />
+        </Card>
+      )}
+
+      {/* Descripción */}
+      <Input label='Descripción (opcional)' value={desc}
+        onChange={e => setDesc(e.target.value)} placeholder='Ej: Mesa comedor cliente García' />
+
+      {/* Etiquetas */}
+      <Input label='Etiquetas (separadas por coma)' value={tags}
+        onChange={e => setTags(e.target.value)} placeholder='Ej: VIP, mayorista, urgente' />
+
+      <Btn onClick={handleSubmit} full bg={type === 'ingreso' ? C.verde : C.rojo} color='white' style={{ marginTop: 4 }}>
+        Guardar {type}
+      </Btn>
+    </div>
+  )
+}
+// ─── VISTA INICIO ────────────────────────────────────────────────────────────
+function VistaInicio({ movements, fondoInicial, setFondoInicial, showToast }) {
+  const [editingFondo, setEditingFondo] = useState(false)
+  const [fondoInput, setFondoInput]     = useState(String(fondoInicial))
+  const today = isoToday()
+
+  const todayMovs = useMemo(() =>
+    movements.filter(m => m.date === today), [movements, today])
+
+  const ingresos = useMemo(() =>
+    todayMovs.filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0), [todayMovs])
+
+  const egresos = useMemo(() =>
+    todayMovs.filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0), [todayMovs])
+
+  const saldoDia = ingresos - egresos
+
+  const byMedio = useMemo(() =>
+    MEDIOS.map(m => ({
+      ...m,
+      total: todayMovs
+        .filter(mv => mv.medio === m.id)
+        .reduce((s, mv) => s + (mv.type === 'ingreso' ? mv.amount : -mv.amount), 0),
+    })), [todayMovs])
+
+  const efectivoEsperado = useMemo(() => {
+    const ingEfectivo = todayMovs.filter(m => m.type === 'ingreso' && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0)
+    const egEfectivo  = todayMovs.filter(m => m.type === 'egreso'  && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0)
+    const vueltos     = todayMovs.reduce((s, m) => s + (m.vuelto || 0), 0)
+    return fondoInicial + ingEfectivo - egEfectivo - vueltos
+  }, [todayMovs, fondoInicial])
+
+  const saveFondo = () => {
+    const n = parseFloat(fondoInput)
+    if (isNaN(n) || n < 0) return
+    setFondoInicial(n)
+    setEditingFondo(false)
+    showToast('Fondo actualizado', 'ok')
+  }
+
+  // Chart data
+  const chartData = MEDIOS.map(m => ({
+    label: m.label.split(' ')[0],
+    value: Math.max(todayMovs.filter(mv => mv.medio === m.id && mv.type === 'ingreso').reduce((s, mv) => s + mv.amount, 0), 0),
+    color: m.color,
+  }))
+
+  return (
+    <div>
+      {/* Header fecha */}
+      <Card style={{ marginBottom: 14, background: C.negro, border: 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: C.topo, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>HOY</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'white', marginTop: 2 }}>
+              {fmtDateFull(today)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 11, color: C.topo }}>Saldo del día</div>
+            <div style={{ fontSize: 24, fontWeight: 900, color: saldoDia >= 0 ? C.verde : C.rojo }}>
+              {fmt(saldoDia)}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Fondo inicial */}
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.topo, textTransform: 'uppercase', letterSpacing: 1 }}>
+              💰 Fondo de caja inicial
+            </div>
+            {editingFondo ? (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                <input type='number' value={fondoInput} onChange={e => setFondoInput(e.target.value)}
+                  inputMode='numeric'
+                  style={{ width: 120, padding: '6px 10px', borderRadius: 6, border: `1.5px solid ${C.oliva}`, fontSize: 16, fontWeight: 700 }} />
+                <Btn sm onClick={saveFondo} bg={C.verde} color='white'>OK</Btn>
+                <Btn sm onClick={() => setEditingFondo(false)} bg={C.hueso2}>✕</Btn>
+              </div>
+            ) : (
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.negro, marginTop: 4 }}>{fmt(fondoInicial)}</div>
+            )}
+          </div>
+          {!editingFondo && (
+            <Btn sm onClick={() => { setFondoInput(String(fondoInicial)); setEditingFondo(true) }} bg={C.hueso2}>
               ✏️ Editar
             </Btn>
           )}
@@ -286,542 +616,470 @@ function Dashboard({ movements, cajaInicial, todayDate, onSetCajaInicial }) {
       </Card>
 
       {/* Ingresos / Egresos */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
-        <Card style={{ borderTop: `3px solid ${C.verde}` }}>
-          <div style={{ fontSize: 11, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>
-            ↑ Ingresos
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: C.verde, marginTop: 4 }}>
-            {fmt(totalIngresos)}
-          </div>
-          <div style={{ fontSize: 11, color: C.topo }}>
-            {todayMovs.filter(m => m.type === 'ingreso').length} mov.
-          </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <Card style={{ borderLeft: `3px solid ${C.verde}` }}>
+          <div style={{ fontSize: 11, color: C.verde, fontWeight: 700, textTransform: 'uppercase' }}>↑ Ingresos</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.verde, marginTop: 4 }}>{fmt(ingresos)}</div>
+          <div style={{ fontSize: 12, color: C.topo }}>{todayMovs.filter(m => m.type === 'ingreso').length} mov.</div>
         </Card>
-        <Card style={{ borderTop: `3px solid ${C.rojo}` }}>
-          <div style={{ fontSize: 11, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>
-            ↓ Egresos
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: C.rojo, marginTop: 4 }}>
-            {fmt(totalEgresos)}
-          </div>
-          <div style={{ fontSize: 11, color: C.topo }}>
-            {todayMovs.filter(m => m.type === 'egreso').length} mov.
-          </div>
+        <Card style={{ borderLeft: `3px solid ${C.rojo}` }}>
+          <div style={{ fontSize: 11, color: C.rojo, fontWeight: 700, textTransform: 'uppercase' }}>↓ Egresos</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.rojo, marginTop: 4 }}>{fmt(egresos)}</div>
+          <div style={{ fontSize: 12, color: C.topo }}>{todayMovs.filter(m => m.type === 'egreso').length} mov.</div>
         </Card>
       </div>
 
       {/* Por medio de pago */}
-      <Card style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
           Por medio de pago
         </div>
-        {MEDIOS.map(md => (
-          <div key={md.id} style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '8px 0', borderBottom: `1px dashed ${C.hueso2}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 18 }}>{md.emoji}</span>
-              <span style={{ fontSize: 13, color: C.negro }}>{md.label}</span>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <span style={{
-                fontSize: 13, fontWeight: 700,
-                color: byMedio[md.id].neto >= 0 ? C.verde : C.rojo,
-              }}>
-                {fmt(byMedio[md.id].neto)}
-              </span>
-              {byMedio[md.id].ing > 0 && (
-                <span style={{ fontSize: 11, color: C.topo, marginLeft: 6 }}>+{fmt(byMedio[md.id].ing)}</span>
-              )}
-              {byMedio[md.id].eg > 0 && (
-                <span style={{ fontSize: 11, color: C.topo }}> -{fmt(byMedio[md.id].eg)}</span>
-              )}
-            </div>
+        {byMedio.map(m => (
+          <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px dashed ${C.hueso2}` }}>
+            <span style={{ fontSize: 14, color: C.negro }}>{m.emoji} {m.label}</span>
+            <span style={{ fontWeight: 700, color: m.total >= 0 ? C.verde : C.rojo }}>{fmt(m.total)}</span>
           </div>
         ))}
+        {/* Mini gráfico de ingresos */}
+        {ingresos > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: C.topo, marginTop: 12, marginBottom: 4, fontWeight: 700, textTransform: 'uppercase' }}>
+              Ingresos por canal
+            </div>
+            <MiniBarChart data={chartData} />
+          </>
+        )}
       </Card>
 
-      {/* Efectivo en caja */}
-      <Card style={{ marginBottom: 12, borderLeft: `4px solid ${C.oliva}` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>
+      {/* Efectivo en caja esperado */}
+      <Card style={{ marginBottom: 14, background: C.hueso, border: `1px solid ${C.arena}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1 }}>
               💵 Efectivo en caja (esperado)
             </div>
-            <div style={{ fontSize: 11, color: C.topo, marginTop: 4, lineHeight: 1.5 }}>
-              {fmt(cajaHoy)} inicial + {fmt(byMedio.efectivo.ing)} ing − {fmt(byMedio.efectivo.eg)} eg − {fmt(totalVueltos)} vueltos
+            <div style={{ fontSize: 12, color: C.topo, marginTop: 2 }}>
+              {fmt(fondoInicial)} inicial + ingresos - egresos - vueltos
             </div>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: C.negro, flexShrink: 0 }}>
-            {fmt(efectivoEsperado)}
-          </div>
+          <div style={{ fontSize: 26, fontWeight: 900, color: C.negro }}>{fmt(efectivoEsperado)}</div>
         </div>
       </Card>
 
       {/* Movimientos de hoy */}
-      <div style={{ fontSize: 13, fontWeight: 700, color: C.negro, marginBottom: 8 }}>
-        Movimientos de hoy ({todayMovs.length})
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <h3 style={{ color: C.negro }}>Movimientos de hoy ({todayMovs.length})</h3>
+        {todayMovs.length > 0 && (
+          <Btn sm onClick={() => exportCSV(todayMovs)} bg={C.hueso2} color={C.negro}>
+            📥 CSV
+          </Btn>
+        )}
       </div>
-      {todayMovs.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: C.topo, fontSize: 13 }}>
-          Sin movimientos todavía.<br />
-          <span style={{ fontSize: 12 }}>Tocá + para agregar el primero.</span>
+      {todayMovs.length === 0 && (
+        <div style={{ textAlign: 'center', color: C.topo, padding: '32px 0' }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+          <div>Sin movimientos todavía.</div>
+          <div style={{ fontSize: 13 }}>Tocá + para agregar el primero.</div>
         </div>
-      ) : (
-        [...todayMovs].reverse().map(m => (
-          <MovRow key={m.id} mov={m} onDelete={() => {}} />
-        ))
       )}
     </div>
   )
 }
+// ─── VISTA HISTORIAL ─────────────────────────────────────────────────────────
+function VistaHistorial({ movements, onEdit, onDelete }) {
+  const [filterDate, setFilterDate]   = useState('')
+  const [filterType, setFilterType]   = useState('')
+  const [filterMedio, setFilterMedio] = useState('')
+  const [filterRange, setFilterRange] = useState('day') // 'day' | 'week' | 'month'
+  const [search, setSearch]           = useState('')
 
-// ─── NUEVO MOVIMIENTO ─────────────────────────────────────────────────────────
-function NuevoMovimiento({ onSave, todayDate }) {
-  const [tipo, setTipo]       = useState('ingreso')
-  const [categoria, setCat]   = useState('')
-  const [medio, setMedio]     = useState('')
-  const [monto, setMonto]     = useState('')
-  const [desc, setDesc]       = useState('')
-  const [entrego, setEntrego] = useState('')
-  const [fecha, setFecha]     = useState(todayDate)
-  const [saved, setSaved]     = useState(false)
-  const [error, setError]     = useState('')
-
-  const vuelto =
-    medio === 'efectivo' && parseFloat(entrego) > 0
-      ? Math.max(0, parseFloat(entrego) - (parseFloat(monto) || 0))
-      : 0
-
-  const submit = () => {
-    if (!monto || isNaN(parseFloat(monto)) || parseFloat(monto) <= 0) {
-      setError('El monto es obligatorio y debe ser mayor a 0.'); return
-    }
-    if (!categoria) { setError('Elegí una categoría.'); return }
-    if (!medio)     { setError('Elegí el medio de pago.'); return }
-    setError('')
-
-    onSave({
-      id: uid(),
-      type: tipo,
-      category: categoria,
-      paymentMethod: medio,
-      amount: parseFloat(monto),
-      description: desc,
-      vuelto,
-      date: fecha,
-      time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+  const filtered = useMemo(() => {
+    const today = new Date(isoToday())
+    return movements.filter(m => {
+      // Range filter
+      if (!filterDate) {
+        const mDate = new Date(m.date)
+        if (filterRange === 'week') {
+          const diff = (today - mDate) / (1000 * 60 * 60 * 24)
+          if (diff > 6 || diff < 0) return false
+        } else if (filterRange === 'month') {
+          if (mDate.getFullYear() !== today.getFullYear() || mDate.getMonth() !== today.getMonth()) return false
+        } else {
+          if (m.date !== isoToday()) return false
+        }
+      } else {
+        if (m.date !== filterDate) return false
+      }
+      if (filterType  && m.type  !== filterType)  return false
+      if (filterMedio && m.medio !== filterMedio)  return false
+      if (search && !((m.desc || '').toLowerCase().includes(search.toLowerCase()) ||
+                      m.cat.toLowerCase().includes(search.toLowerCase()) ||
+                      (m.tags || []).some(t => t.toLowerCase().includes(search.toLowerCase())))) return false
+      return true
     })
+  }, [movements, filterDate, filterType, filterMedio, filterRange, search])
 
-    setCat(''); setMedio(''); setMonto(''); setDesc(''); setEntrego('')
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2500)
+  const totalIng  = useMemo(() => filtered.filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0), [filtered])
+  const totalEgr  = useMemo(() => filtered.filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0), [filtered])
+
+  // Group by date for multi-day view
+  const grouped = useMemo(() => {
+    const groups = {}
+    filtered.forEach(m => {
+      if (!groups[m.date]) groups[m.date] = []
+      groups[m.date].push(m)
+    })
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]))
+  }, [filtered])
+
+  const showGrouped = filterRange !== 'day' && !filterDate
+
+  return (
+    <div>
+      <h2 style={{ marginBottom: 14, color: C.negro }}>Historial</h2>
+
+      {/* Range selector */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        {[['day', 'Hoy'], ['week', 'Semana'], ['month', 'Mes']].map(([v, l]) => (
+          <button key={v} onClick={() => { setFilterRange(v); setFilterDate('') }} style={{
+            flex: 1, padding: '8px 4px', border: 'none', borderRadius: 7, cursor: 'pointer',
+            fontWeight: 700, fontSize: 12,
+            background: filterRange === v && !filterDate ? C.oliva : C.hueso2,
+            color: filterRange === v && !filterDate ? 'white' : C.topo,
+          }}>{l}</button>
+        ))}
+      </div>
+
+      <Card style={{ marginBottom: 14 }}>
+        {/* Search */}
+        <Input label='Buscar' value={search} onChange={e => setSearch(e.target.value)}
+          placeholder='Descripción, categoría, etiqueta...' prefix='🔍' />
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <FieldLabel>Fecha específica</FieldLabel>
+            <input type='date' value={filterDate}
+              onChange={e => setFilterDate(e.target.value)}
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 6,
+                border: `1.5px solid ${C.hueso2}`, fontSize: 14, boxSizing: 'border-box',
+              }} />
+          </div>
+          <div>
+            <FieldLabel>Tipo</FieldLabel>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1.5px solid ${C.hueso2}`, fontSize: 14 }}>
+              <option value=''>Todos</option>
+              <option value='ingreso'>Ingresos</option>
+              <option value='egreso'>Egresos</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <FieldLabel>Medio de pago</FieldLabel>
+          <select value={filterMedio} onChange={e => setFilterMedio(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1.5px solid ${C.hueso2}`, fontSize: 14 }}>
+            <option value=''>Todos los medios</option>
+            {MEDIOS.map(m => <option key={m.id} value={m.id}>{m.emoji} {m.label}</option>)}
+          </select>
+        </div>
+      </Card>
+
+      {/* Totales */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 14 }}>
+        <Card style={{ borderLeft: `3px solid ${C.verde}`, padding: '10px 12px' }}>
+          <div style={{ fontSize: 10, color: C.verde, fontWeight: 700, textTransform: 'uppercase' }}>↑ Ingresos</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.verde }}>{fmt(totalIng)}</div>
+        </Card>
+        <Card style={{ borderLeft: `3px solid ${C.rojo}`, padding: '10px 12px' }}>
+          <div style={{ fontSize: 10, color: C.rojo, fontWeight: 700, textTransform: 'uppercase' }}>↓ Egresos</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.rojo }}>{fmt(totalEgr)}</div>
+        </Card>
+        <Card style={{ borderLeft: `3px solid ${C.azul}`, padding: '10px 12px' }}>
+          <div style={{ fontSize: 10, color: C.azul, fontWeight: 700, textTransform: 'uppercase' }}> = Saldo</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: totalIng - totalEgr >= 0 ? C.verde : C.rojo }}>
+            {fmt(totalIng - totalEgr)}
+          </div>
+        </Card>
+      </div>
+
+      {/* Export */}
+      {filtered.length > 0 && (
+        <div style={{ textAlign: 'right', marginBottom: 10 }}>
+          <Btn sm onClick={() => exportCSV(filtered)} bg={C.hueso2} color={C.negro}>
+            📥 Exportar CSV ({filtered.length} mov.)
+          </Btn>
+        </div>
+      )}
+
+      {/* Movimientos */}
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', color: C.topo, padding: '32px 0' }}>
+          <div style={{ fontSize: 32 }}>🔍</div>
+          <div>No hay movimientos con esos filtros.</div>
+        </div>
+      ) : showGrouped ? (
+        grouped.map(([date, movs]) => {
+          const dayIng = movs.filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0)
+          const dayEgr = movs.filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0)
+          return (
+            <div key={date}>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '8px 0', borderBottom: `2px solid ${C.hueso2}`, marginBottom: 4, marginTop: 12,
+              }}>
+                <span style={{ fontWeight: 800, fontSize: 13, color: C.oliva }}>{fmtDate(date)}</span>
+                <span style={{ fontSize: 12, color: C.topo }}>
+                  +{fmt(dayIng)} / -{fmt(dayEgr)} = <strong style={{ color: dayIng - dayEgr >= 0 ? C.verde : C.rojo }}>{fmt(dayIng - dayEgr)}</strong>
+                </span>
+              </div>
+              {movs.map(m => <MovCard key={m.id} mov={m} onEdit={onEdit} onDelete={onDelete} />)}
+            </div>
+          )
+        })
+      ) : (
+        filtered.map(m => <MovCard key={m.id} mov={m} onEdit={onEdit} onDelete={onDelete} />)
+      )}
+    </div>
+  )
+}
+// ─── VISTA ARQUEO ────────────────────────────────────────────────────────────
+function VistaArqueo({ movements, fondoInicial, showToast }) {
+  const [conteoFisico, setConteoFisico] = useState('')
+  const today = isoToday()
+
+  const todayMovs = useMemo(() =>
+    movements.filter(m => m.date === today), [movements, today])
+
+  const ingEfectivo = useMemo(() =>
+    todayMovs.filter(m => m.type === 'ingreso' && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0),
+    [todayMovs])
+
+  const egEfectivo = useMemo(() =>
+    todayMovs.filter(m => m.type === 'egreso' && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0),
+    [todayMovs])
+
+  const vueltos = useMemo(() =>
+    todayMovs.reduce((s, m) => s + (m.vuelto || 0), 0), [todayMovs])
+
+  const efectivoEsperado = fondoInicial + ingEfectivo - egEfectivo - vueltos
+
+  const conteoN = parseFloat(conteoFisico) || 0
+  const diferencia = conteoN - efectivoEsperado
+
+  const ingresosDig = useMemo(() =>
+    MEDIOS.filter(m => m.id !== 'efectivo').map(med => ({
+      ...med,
+      total: todayMovs.filter(m => m.medio === med.id).reduce((s, m) =>
+        s + (m.type === 'ingreso' ? m.amount : -m.amount), 0),
+    })), [todayMovs])
+
+  const handleCerrar = () => {
+    showToast('Caja cerrada correctamente 🔒', 'ok')
   }
 
   return (
     <div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: C.negro, marginBottom: 16 }}>
-        Nuevo movimiento
-      </div>
+      <h2 style={{ marginBottom: 4, color: C.negro }}>Arqueo de caja</h2>
+      <div style={{ fontSize: 14, color: C.topo, marginBottom: 18 }}>{fmtDateFull(today)}</div>
 
-      {/* Toggle ingreso / egreso */}
-      <div style={{
-        display: 'flex', borderRadius: 8, overflow: 'hidden',
-        border: `1.5px solid ${C.hueso2}`, marginBottom: 20,
-      }}>
-        {['ingreso', 'egreso'].map(t => (
-          <button key={t} onClick={() => { setTipo(t); setCat('') }}
-            style={{
-              flex: 1, padding: 12, border: 'none', cursor: 'pointer',
-              fontWeight: 700, fontSize: 14, transition: 'all .15s',
-              background: tipo === t ? (t === 'ingreso' ? C.verde : C.rojo) : 'white',
-              color: tipo === t ? 'white' : C.topo,
-            }}>
-            {t === 'ingreso' ? '↑ Ingreso' : '↓ Egreso'}
-          </button>
-        ))}
-      </div>
-
-      <Input label="Fecha" type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
-
-      <Select
-        label="Categoría" required value={categoria}
-        onChange={e => setCat(e.target.value)}
-        options={tipo === 'ingreso' ? CAT_INGRESO : CAT_EGRESO}
-      />
-
-      {/* Medio de pago */}
-      <div style={{ marginBottom: 14 }}>
-        <FieldLabel required>Medio de pago</FieldLabel>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          {MEDIOS.map(md => (
-            <button key={md.id} onClick={() => { setMedio(md.id); setEntrego('') }}
-              style={{
-                padding: '10px 8px', borderRadius: 6,
-                border: `2px solid ${medio === md.id ? md.color : C.hueso2}`,
-                background: medio === md.id ? md.color + '18' : 'white',
-                cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                color: medio === md.id ? md.color : C.topo,
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}>
-              <span style={{ fontSize: 18 }}>{md.emoji}</span> {md.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <Input
-        label="Monto" type="number" required prefix="$"
-        value={monto} onChange={e => setMonto(e.target.value)} placeholder="0"
-      />
-
-      {/* Calculadora de vuelto */}
-      {tipo === 'ingreso' && medio === 'efectivo' && (
-        <div style={{ background: C.hueso, borderRadius: 8, padding: '14px 16px', marginBottom: 14 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: C.oliva, marginBottom: 10 }}>
-            💵 Calculadora de vuelto
-          </div>
-          <Input
-            label="El cliente entregó" type="number" prefix="$"
-            value={entrego} onChange={e => setEntrego(e.target.value)} placeholder="0"
-          />
-          {parseFloat(entrego) > 0 && (
-            <div style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              background: vuelto >= 0 ? C.verde + '22' : C.rojo + '22',
-              borderRadius: 6, padding: '10px 14px',
-            }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: C.negro }}>
-                {vuelto >= 0 ? '✓ Vuelto a dar:' : '⚠ Falta:'}
-              </span>
-              <span style={{ fontSize: 22, fontWeight: 700, color: vuelto >= 0 ? C.verde : C.rojo }}>
-                {fmt(Math.abs(vuelto))}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      <Input
-        label="Descripción (opcional)"
-        value={desc} onChange={e => setDesc(e.target.value)}
-        placeholder="Ej: Mesa comedor cliente García"
-      />
-
-      {error && (
-        <div style={{ background: C.rojo + '22', color: C.rojo, borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
-          ⚠ {error}
-        </div>
-      )}
-      {saved && (
-        <div style={{ background: C.verde + '22', color: C.verde, borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
-          ✓ Movimiento guardado
-        </div>
-      )}
-
-      <Btn full bg={tipo === 'ingreso' ? C.verde : C.rojo} color="white" onClick={submit}>
-        Guardar {tipo === 'ingreso' ? 'ingreso' : 'egreso'}
-      </Btn>
-    </div>
-  )
-}
-
-// ─── HISTORIAL ────────────────────────────────────────────────────────────────
-function Historial({ movements, onDelete }) {
-  const [filtroFecha, setFiltroFecha] = useState('')
-  const [filtroTipo, setFiltroTipo]   = useState('')
-  const [filtroMedio, setFiltroMedio] = useState('')
-
-  let filtered = [...movements].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
-  if (filtroFecha) filtered = filtered.filter(m => m.date === filtroFecha)
-  if (filtroTipo)  filtered = filtered.filter(m => m.type === filtroTipo)
-  if (filtroMedio) filtered = filtered.filter(m => m.paymentMethod === filtroMedio)
-
-  const totalIng = filtered.filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0)
-  const totalEg  = filtered.filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0)
-
-  const byDate = {}
-  filtered.forEach(m => { if (!byDate[m.date]) byDate[m.date] = []; byDate[m.date].push(m) })
-  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a))
-
-  return (
-    <div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: C.negro, marginBottom: 14 }}>Historial</div>
-
+      {/* Resumen efectivo */}
       <Card style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: C.oliva, marginBottom: 10 }}>
-          Filtros
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 11, color: C.topo, marginBottom: 4 }}>Fecha</div>
-            <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
-              style={{ width: '100%', border: `1.5px solid ${C.hueso2}`, borderRadius: 6, padding: 8, fontSize: 13, outline: 'none' }} />
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: C.topo, marginBottom: 4 }}>Tipo</div>
-            <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
-              style={{ width: '100%', border: `1.5px solid ${C.hueso2}`, borderRadius: 6, padding: 8, fontSize: 13, outline: 'none', background: 'white' }}>
-              <option value="">Todos</option>
-              <option value="ingreso">Ingresos</option>
-              <option value="egreso">Egresos</option>
-            </select>
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: C.topo, marginBottom: 4 }}>Medio de pago</div>
-          <select value={filtroMedio} onChange={e => setFiltroMedio(e.target.value)}
-            style={{ width: '100%', border: `1.5px solid ${C.hueso2}`, borderRadius: 6, padding: 8, fontSize: 13, outline: 'none', background: 'white' }}>
-            <option value="">Todos los medios</option>
-            {MEDIOS.map(md => <option key={md.id} value={md.id}>{md.emoji} {md.label}</option>)}
-          </select>
-        </div>
-        {(filtroFecha || filtroTipo || filtroMedio) && (
-          <button onClick={() => { setFiltroFecha(''); setFiltroTipo(''); setFiltroMedio('') }}
-            style={{ marginTop: 8, background: 'none', border: 'none', color: C.oliva, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-            ✕ Limpiar filtros
-          </button>
-        )}
-      </Card>
-
-      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-        {[
-          { label: '↑ Ingresos', val: totalIng, color: C.verde },
-          { label: '↓ Egresos',  val: totalEg,  color: C.rojo  },
-          { label: '= Saldo',    val: totalIng - totalEg, color: totalIng - totalEg >= 0 ? C.negro : C.rojo },
-        ].map(({ label, val, color }) => (
-          <div key={label} style={{ flex: 1, background: color + '18', borderRadius: 8, padding: '10px 12px' }}>
-            <div style={{ fontSize: 10, color, fontWeight: 700, textTransform: 'uppercase' }}>{label}</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color }}>{fmt(val)}</div>
-          </div>
-        ))}
-      </div>
-
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: C.topo, fontSize: 13 }}>
-          No hay movimientos con esos filtros.
-        </div>
-      ) : (
-        dates.map(d => (
-          <div key={d} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, padding: '6px 0', borderBottom: `2px solid ${C.negro}`, marginBottom: 4 }}>
-              {fmtDate(d)}
-              <span style={{ fontWeight: 400, marginLeft: 8 }}>
-                +{fmt(byDate[d].filter(m => m.type === 'ingreso').reduce((s, m) => s + m.amount, 0))} / -{fmt(byDate[d].filter(m => m.type === 'egreso').reduce((s, m) => s + m.amount, 0))}
-              </span>
-            </div>
-            {byDate[d].map(m => <MovRow key={m.id} mov={m} onDelete={onDelete} />)}
-          </div>
-        ))
-      )}
-    </div>
-  )
-}
-
-// ─── ARQUEO ───────────────────────────────────────────────────────────────────
-function Arqueo({ movements, cajaInicial, todayDate }) {
-  const [contado, setContado] = useState('')
-  const [cerrado, setCerrado] = useState(false)
-
-  const todayMovs    = movements.filter(m => m.date === todayDate)
-  const cajaHoy      = cajaInicial[todayDate] || 0
-  const ingEfectivo  = todayMovs.filter(m => m.type === 'ingreso' && m.paymentMethod === 'efectivo').reduce((s, m) => s + m.amount, 0)
-  const egEfectivo   = todayMovs.filter(m => m.type === 'egreso'  && m.paymentMethod === 'efectivo').reduce((s, m) => s + m.amount, 0)
-  const totalVueltos = todayMovs.filter(m => m.type === 'ingreso' && m.paymentMethod === 'efectivo').reduce((s, m) => s + (m.vuelto || 0), 0)
-  const efectivoEsperado = cajaHoy + ingEfectivo - egEfectivo - totalVueltos
-
-  const ing = (mp) => todayMovs.filter(m => m.type === 'ingreso' && m.paymentMethod === mp).reduce((s, m) => s + m.amount, 0)
-
-  const diferencia = contado !== '' ? parseFloat(contado) - efectivoEsperado : null
-
-  return (
-    <div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: C.negro, marginBottom: 4 }}>Arqueo de caja</div>
-      <div style={{ fontSize: 13, color: C.topo, marginBottom: 16 }}>
-        {new Date(todayDate + 'T12:00').toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
-      </div>
-
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
-          Resumen del día
+        <div style={{ fontWeight: 700, fontSize: 12, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+          Resumen del día — Efectivo
         </div>
         {[
-          ['Fondo inicial (efectivo)', fmt(cajaHoy)],
-          ['+ Ventas en efectivo',     fmt(ingEfectivo)],
-          ['− Pagos en efectivo',      fmt(egEfectivo)],
-          ['− Vueltos entregados',     fmt(totalVueltos)],
+          ['Fondo inicial (efectivo)', fondoInicial],
+          ['+ Ventas en efectivo',     ingEfectivo],
+          ['- Pagos en efectivo',      egEfectivo],
+          ['- Vueltos entregados',     vueltos],
         ].map(([label, val]) => (
-          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px dashed ${C.hueso2}`, fontSize: 13 }}>
-            <span style={{ color: C.topo }}>{label}</span>
-            <span style={{ fontWeight: 600 }}>{val}</span>
+          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: `1px dashed ${C.hueso2}`, fontSize: 14, color: C.negro }}>
+            <span>{label}</span>
+            <span style={{ fontWeight: 600 }}>{fmt(val)}</span>
           </div>
         ))}
-        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', fontSize: 15, fontWeight: 700 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0', fontWeight: 800, fontSize: 16, color: C.negro }}>
           <span>= Efectivo esperado</span>
           <span>{fmt(efectivoEsperado)}</span>
         </div>
       </Card>
 
+      {/* Digitales */}
       <Card style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: C.topo, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
           Ingresos digitales del día
         </div>
-        {[
-          ['🏦 Transferencias', ing('transferencia')],
-          ['💳 Tarjeta Nave',   ing('nave')],
-          ['📱 Mercado Pago',   ing('mp')],
-        ].map(([label, val]) => (
-          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px dashed ${C.hueso2}`, fontSize: 13 }}>
-            <span style={{ color: C.topo }}>{label}</span>
-            <span style={{ fontWeight: 600, color: val > 0 ? C.verde : C.negro }}>{fmt(val)}</span>
+        {ingresosDig.map(m => (
+          <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: `1px dashed ${C.hueso2}`, fontSize: 14, color: C.negro }}>
+            <span>{m.emoji} {m.label}</span>
+            <span style={{ fontWeight: 600, color: m.total >= 0 ? C.verde : C.rojo }}>{fmt(m.total)}</span>
           </div>
         ))}
       </Card>
 
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+      {/* Conteo físico */}
+      <Card style={{ marginBottom: 14, background: C.hueso, border: `1px solid ${C.arena}` }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: C.oliva, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
           Conteo físico de caja
         </div>
-        <Input
-          label="¿Cuánto efectivo hay ahora?" type="number" prefix="$"
-          value={contado} onChange={e => { setContado(e.target.value); setCerrado(false) }} placeholder="0"
-        />
-        {diferencia !== null && (
+        <div style={{ fontSize: 13, color: C.topo, marginBottom: 12 }}>¿Cuánto efectivo hay ahora?</div>
+        <Input type='number' value={conteoFisico}
+          onChange={e => setConteoFisico(e.target.value)} prefix='$' inputMode='numeric'
+          placeholder='Contá el dinero...' />
+        {conteoFisico !== '' && (
           <div style={{
-            borderRadius: 8, padding: '12px 16px', textAlign: 'center',
-            background: Math.abs(diferencia) < 100 ? C.verde + '22' : diferencia > 0 ? C.azul + '22' : C.rojo + '22',
+            marginTop: 8, padding: '12px 14px', borderRadius: 8,
+            background: Math.abs(diferencia) < 1 ? C.verde + '15' : diferencia > 0 ? C.azul + '15' : C.rojo + '15',
+            border: `1px solid ${Math.abs(diferencia) < 1 ? C.verde : diferencia > 0 ? C.azul : C.rojo}44`,
           }}>
-            <div style={{ fontSize: 12, color: C.topo, marginBottom: 4 }}>Diferencia</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: Math.abs(diferencia) < 100 ? C.verde : diferencia > 0 ? C.azul : C.rojo }}>
-              {diferencia > 0 ? '+' : ''}{fmt(diferencia)}
-            </div>
-            <div style={{ fontSize: 12, marginTop: 4, color: C.topo }}>
-              {Math.abs(diferencia) < 100
-                ? '✓ La caja cierra bien'
-                : diferencia > 0 ? '↑ Hay más efectivo del esperado'
-                : '↓ Falta efectivo en la caja'}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: C.negro }}>
+                {Math.abs(diferencia) < 1 ? '✅ Sin diferencia' : diferencia > 0 ? '⬆️ Sobrante' : '⬇️ Faltante'}
+              </span>
+              <span style={{ fontWeight: 800, fontSize: 20, color: Math.abs(diferencia) < 1 ? C.verde : diferencia > 0 ? C.azul : C.rojo }}>
+                {diferencia > 0 ? '+' : ''}{fmt(diferencia)}
+              </span>
             </div>
           </div>
         )}
       </Card>
 
-      <Btn full bg={cerrado ? C.oliva : C.negro} color="white" onClick={() => { if (contado) setCerrado(true) }}>
-        {cerrado ? '✓ Cierre registrado' : 'Cerrar caja del día'}
+      <Btn onClick={handleCerrar} full bg={C.negro} color='white'>
+        🔒 Cerrar caja del día
       </Btn>
-      {cerrado && (
-        <div style={{ textAlign: 'center', marginTop: 10, fontSize: 12, color: C.topo }}>
-          Efectivo contado: {fmt(parseFloat(contado))} · Diferencia: {fmt(diferencia)}
-        </div>
-      )}
     </div>
   )
 }
 
-// ─── APP ROOT ─────────────────────────────────────────────────────────────────
-export default function CajaApp() {
-  const [movements,   setMovements]   = useState([])
-  const [cajaInicial, setCajaInicial] = useState({})
-  const [ready,       setReady]       = useState(false)
-  const [view,        setView]        = useState('dashboard')
+// ─── APP PRINCIPAL ───────────────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab]             = useState('inicio')
+  const [movements, setMovements] = useState(() => load('movements', []))
+  const [fondoInicial, setFondoInicial] = useState(() => {
+    // Cargar fondo del día anterior si existe
+    const savedFondo = load('fondoInicial', 0)
+    const lastFondoDate = load('lastFondoDate', '')
+    const today = isoToday()
+    // Si el fondo fue guardado antes de hoy, arrastrar el saldo de efectivo del día anterior
+    if (lastFondoDate && lastFondoDate !== today) {
+      const yesterday = lastFondoDate
+      const yesterdayMovs = (load('movements', [])).filter(m => m.date === yesterday)
+      const ingEfec = yesterdayMovs.filter(m => m.type === 'ingreso' && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0)
+      const egEfec  = yesterdayMovs.filter(m => m.type === 'egreso'  && m.medio === 'efectivo').reduce((s, m) => s + m.amount, 0)
+      const vueltos = yesterdayMovs.reduce((s, m) => s + (m.vuelto || 0), 0)
+      return savedFondo + ingEfec - egEfec - vueltos
+    }
+    return savedFondo
+  })
+  const [toast, setToast]         = useState(null)
+  const [confirmId, setConfirmId] = useState(null)
+  const [editMov, setEditMov]     = useState(null)
 
-  const todayDate = isoToday()
-
+  // Persist
+  useEffect(() => { save('movements', movements) }, [movements])
   useEffect(() => {
-    setMovements(load('dabiens_caja_movs', []))
-    setCajaInicial(load('dabiens_caja_inicial', {}))
-    setReady(true)
+    save('fondoInicial', fondoInicial)
+    save('lastFondoDate', isoToday())
+  }, [fondoInicial])
+
+  const showToast = useCallback((msg, type = 'ok') => {
+    setToast({ msg, type, id: uid() })
   }, [])
 
-  const addMovement = (mov) => {
-    const updated = [...movements, mov]
-    setMovements(updated)
-    save('dabiens_caja_movs', updated)
-    setView('dashboard')
-  }
+  const handleSave = useCallback((mov) => {
+    setMovements(prev => [mov, ...prev])
+    setTab('inicio')
+  }, [])
 
-  const deleteMovement = (id) => {
-    const updated = movements.filter(m => m.id !== id)
-    setMovements(updated)
-    save('dabiens_caja_movs', updated)
-  }
+  const handleDelete = useCallback((id) => {
+    setConfirmId(id)
+  }, [])
 
-  const setFondoInicial = (date, monto) => {
-    const updated = { ...cajaInicial, [date]: monto }
-    setCajaInicial(updated)
-    save('dabiens_caja_inicial', updated)
-  }
+  const confirmDelete = useCallback(() => {
+    setMovements(prev => prev.filter(m => m.id !== confirmId))
+    setConfirmId(null)
+    showToast('Movimiento eliminado', 'error')
+  }, [confirmId, showToast])
 
-  const NAV = [
-    { id: 'dashboard', label: 'Inicio',    emoji: '🏠' },
-    { id: 'nuevo',     label: 'Nuevo',     emoji: '＋' },
-    { id: 'historial', label: 'Historial', emoji: '📋' },
-    { id: 'arqueo',    label: 'Arqueo',    emoji: '🧾' },
-  ]
+  const handleEdit = useCallback((mov) => {
+    setEditMov(mov)
+  }, [])
 
-  if (!ready) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.hueso, color: C.topo, fontSize: 14 }}>
-      Cargando...
-    </div>
-  )
+  const handleEditSave = useCallback((updated) => {
+    setMovements(prev => prev.map(m => m.id === updated.id ? updated : m))
+    setEditMov(null)
+    showToast('Movimiento actualizado ✅', 'ok')
+  }, [showToast])
+
+  const todayCount = useMemo(() =>
+    movements.filter(m => m.date === isoToday()).length, [movements])
 
   return (
-    <div style={{ fontFamily: 'var(--font-poppins), system-ui, sans-serif', background: C.hueso, minHeight: '100vh', maxWidth: 480, margin: '0 auto', position: 'relative' }}>
+    <div style={{
+      minHeight: '100dvh', background: C.hueso, fontFamily: "'Inter', system-ui, sans-serif",
+      display: 'flex', flexDirection: 'column',
+    }}>
       {/* Top bar */}
-      <div style={{ background: C.negro, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{
+        background: C.negro, padding: '12px 18px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        position: 'sticky', top: 0, zIndex: 100,
+      }}>
         <div>
-          <div style={{ color: C.arena, fontSize: 11, fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase' }}>
-            Dabien's & Co.
-          </div>
-          <div style={{ color: 'white', fontSize: 16, fontWeight: 700 }}>Sistema de Caja</div>
+          <div style={{ fontSize: 11, color: C.topo, fontWeight: 700, letterSpacing: 1 }}>DABIEN'S & CO.</div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: 'white' }}>Sistema de Caja</div>
         </div>
-        <div style={{ color: C.topo, fontSize: 11 }}>
-          {movements.filter(m => m.date === todayDate).length} mov. hoy
-        </div>
+        <Badge label={`${todayCount} mov. hoy`} color={C.arena} />
       </div>
 
       {/* Content */}
-      <div style={{ padding: '16px 16px 90px' }}>
-        {view === 'dashboard' && (
-          <Dashboard movements={movements} cajaInicial={cajaInicial} todayDate={todayDate} onSetCajaInicial={setFondoInicial} />
+      <div style={{ flex: 1, padding: '16px 16px 100px', maxWidth: 480, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+        {tab === 'inicio' && (
+          <VistaInicio
+            movements={movements}
+            fondoInicial={fondoInicial}
+            setFondoInicial={setFondoInicial}
+            showToast={showToast}
+          />
         )}
-        {view === 'nuevo' && (
-          <NuevoMovimiento onSave={addMovement} todayDate={todayDate} />
+        {tab === 'nuevo' && (
+          <FormMovimiento onSave={handleSave} showToast={showToast} />
         )}
-        {view === 'historial' && (
-          <Historial movements={movements} onDelete={deleteMovement} />
+        {tab === 'historial' && (
+          <VistaHistorial movements={movements} onEdit={handleEdit} onDelete={handleDelete} />
         )}
-        {view === 'arqueo' && (
-          <Arqueo movements={movements} cajaInicial={cajaInicial} todayDate={todayDate} />
+        {tab === 'arqueo' && (
+          <VistaArqueo movements={movements} fondoInicial={fondoInicial} showToast={showToast} />
         )}
       </div>
 
       {/* Bottom nav */}
-      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, background: 'white', borderTop: `1px solid ${C.hueso2}`, display: 'flex', zIndex: 20 }}>
-        {NAV.map(n => (
-          <button key={n.id} onClick={() => setView(n.id)}
-            style={{
-              flex: 1, padding: '10px 4px 14px', border: 'none', cursor: 'pointer',
-              background: 'transparent', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-              borderTop: view === n.id ? `3px solid ${C.oliva}` : '3px solid transparent',
-            }}>
-            <span style={{
-              fontSize: n.id === 'nuevo' ? 20 : 18,
-              background: n.id === 'nuevo' ? C.negro : 'transparent',
-              color: n.id === 'nuevo' ? 'white' : view === n.id ? C.oliva : C.topo,
-              width: n.id === 'nuevo' ? 34 : 'auto', height: n.id === 'nuevo' ? 34 : 'auto',
-              borderRadius: n.id === 'nuevo' ? '50%' : 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              {n.emoji}
-            </span>
-            <span style={{ fontSize: 10, fontWeight: 600, color: view === n.id ? C.oliva : C.topo }}>
-              {n.label}
-            </span>
-          </button>
-        ))}
+      <div style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0,
+        background: 'white', borderTop: `1px solid ${C.hueso2}`,
+        display: 'flex', zIndex: 100,
+        maxWidth: 480, margin: '0 auto',
+      }}>
+        <NavTab icon='🏠' label='Inicio'    active={tab === 'inicio'}    onClick={() => setTab('inicio')} />
+        <NavTab icon='➕' label='Nuevo'     active={tab === 'nuevo'}     onClick={() => setTab('nuevo')} />
+        <NavTab icon='📋' label='Historial' active={tab === 'historial'} onClick={() => setTab('historial')} />
+        <NavTab icon='🗂️' label='Arqueo'   active={tab === 'arqueo'}    onClick={() => setTab('arqueo')} />
       </div>
+
+      {/* Modals & toasts */}
+      {toast && <Toast key={toast.id} msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      {confirmId && (
+        <ConfirmModal
+          msg='¿Eliminar este movimiento? Esta acción no se puede deshacer.'
+          onConfirm={confirmDelete}
+          onCancel={() => setConfirmId(null)}
+        />
+      )}
+      {editMov && (
+        <EditModal mov={editMov} onSave={handleEditSave} onClose={() => setEditMov(null)} />
+      )}
     </div>
   )
 }
