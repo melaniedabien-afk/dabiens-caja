@@ -54,8 +54,10 @@ const save = (key, val) => {
     syncToSupabase(key, val)
 }
 
+let hydrated = false
+
 async function syncToSupabase(key, val) {
-  if (!supabase) return
+  if (!supabase || !hydrated) return
   try {
     if (key === 'movements') {
       await supabase.from('movements').delete().neq('id', '')
@@ -1053,6 +1055,8 @@ export default function App() {
         }
       } catch (e) {
         console.error('Error cargando datos de Supabase', e)
+      } finally {
+        hydrated = true
       }
     }
     hydrate()
