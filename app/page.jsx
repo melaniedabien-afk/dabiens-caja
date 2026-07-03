@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { supabase } from '../lib/supabaseClient'
 
 // ─── BRAND ───────────────────────────────────────────────────────────────────
 const C = {
@@ -50,6 +51,38 @@ const load = (key, fallback) => {
 }
 const save = (key, val) => {
   try { localStorage.setItem(key, JSON.stringify(val)) } catch {}
+    syncToSupabase(key, val)
+}
+
+async function syncToSupabase(key, val) {
+  if (!supabase) return
+  try {
+    if (key === 'movements') {
+      await supabase.from('movements').delete().neq('id', '')
+      if (Array.isArray(val) && val.length) {
+        const rows = val.map(m => ({
+          id: m.id,
+          type: m.type,
+          date: m.date,
+          cat: m.cat,
+          medio: m.medio,
+          amount: m.amount,
+          descripcion: m.desc || '',
+          tags: m.tags || [],
+          vuelto: m.vuelto || 0,
+          medio_secundario: m.medioSecundario || null,
+          monto_secundario: m.montoSecundario || 0,
+        }))
+        await supabase.from('movements').insert(rows)
+      }
+    } else if (key === 'fondoInicial') {
+      await supabase.from('caja_fondo').upsert({ id: 1, fondo_inicial: val })
+    } else if (key === 'lastFondoDate') {
+      await supabase.from('caja_fondo').upsert({ id: 1, last_fondo_date: val })
+    }
+  } catch (e) {
+    console.error('Error sincronizando con Supabase', e)
+  }
 }
 
 // ─── EXPORT CSV ──────────────────────────────────────────────────────────────
@@ -983,6 +1016,46 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {})
     }
+  }, [])
+
+  // Cargar datos desde Supabase (sincronización entre dispositivos)
+  useEffect(() => {
+    if (!supabase) return
+    async function hydrate() {
+      try {
+        const { data: movs, error } = await supabase
+        .from('movements')
+        .select('*')
+        .order('created_at', { ascending: false })
+        if (!error && movs) {
+          setMovements(movs.map(m => ({
+            id: m.id,
+            type: m.type,
+            date: m.date,
+            cat: m.cat,
+            medio: m.medio,
+            amount: Number(m.amount),
+            desc: m.descripcion || '',
+            tags: m.tags || [],
+            vuelto: Number(m.vuelto) || 0,
+            medioSecundario: m.medio_secundario || null,
+            montoSecundario: Number(m.monto_secundario) || 0,
+          })))
+        }
+        const { data: fondo } = await supabase
+        .from('caja_fondo')
+        .select('*')
+        .eq('id', 1)
+        .single()
+        if (fondo) {
+          if (fondo.fondo_inicial != null) setFondoInicial(Number(fondo.fondo_inicial))
+          if (fondo.last_fondo_date) save('lastFondoDate', fondo.last_fondo_date)
+        }
+      } catch (e) {
+        console.error('Error cargando datos de Supabase', e)
+      }
+    }
+    hydrate()
   }, [])
 
   useEffect(() => { save('movements', movements) }, [movements])
